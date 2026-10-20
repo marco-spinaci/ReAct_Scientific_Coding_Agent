@@ -303,8 +303,6 @@ For less-trusted workloads, a future version should use stronger isolation, rest
 
 ## Future improvements
 
-Possible extensions:
-
 - robust JSON extraction from Markdown-formatted LLM responses.
   This extension is particularly useful for real-world backends such as OpenAI, Ollama or other local models.
 
@@ -337,12 +335,13 @@ Possible extensions:
 ## Development Notes
 
 This project was developed with the assistance of AI-based coding tools.
+
 Architectural decisions, integration, testing, validation, and final review were performed manually.
 
 ## License
 
 
 This project is licensed under the GNU General Public License v3.0 (GPL-3.0).
-See the [LICENSE](LICENSE) file for details.
 
+See the [LICENSE](LICENSE) file for details.
 
