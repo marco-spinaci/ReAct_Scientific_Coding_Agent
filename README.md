@@ -339,4 +339,10 @@ Possible extensions:
 This project was developed with the assistance of AI-based coding tools.
 Architectural decisions, integration, testing, validation, and final review were performed manually.
 
+## License
+
+
+This project is licensed under the GNU General Public License v3.0 (GPL-3.0).
+See the [LICENSE](LICENSE) file for details.
+
 
