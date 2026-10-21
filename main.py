@@ -14,9 +14,8 @@ from src.domain.synthetic_network_prompt import get_synthetic_network_request
 
 
 def build_parser() -> argparse.ArgumentParser:
-
     parser = argparse.ArgumentParser(description = "Run the ReAct-style coding agent.")
-    
+
     parser.add_argument("--sandbox",
             choices=["local", "e2b"],
             default="local",
@@ -31,7 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
             choices = ["success", "broken_then_success", "final_only"], 
             default = "success",
             help = "Fake LLM behavior mode.")
-    
+
     parser.add_argument("--ollama-model",
             default = None,
             help = "Ollama model to use, e.g. qwen2.5-coder:3b.")
@@ -39,7 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ollama-base-url",
             default = None,
             help = "Ollama base URL, e.g. http://localhost:11434.")
-    
+
     parser.add_argument("--output-dir",
             default = "outputs",
             help = "Directory where generated files are copied.")
@@ -58,17 +57,22 @@ def build_parser() -> argparse.ArgumentParser:
             default = get_synthetic_network_request(),
             help = "User request passed to the agent.")
 
+    parser.add_argument("--expect-html",
+            action = "append",
+            default = None,
+            metavar = "FILENAME",
+            help = "Expected HTML artifact filename. Can be specified multiple times.",
+            )
+
     return parser
 
 
 def main() -> None:
-    
     configure_logging()
-    
+
     args = build_parser().parse_args()
-    
-    
-    
+
+
     if args.sandbox == "local":
         sandbox = LocalSandboxExecutor(timeout_seconds = args.timeout, output_dir=args.output_dir)
     elif args.sandbox == "e2b":
@@ -84,11 +88,9 @@ def main() -> None:
     else:
         raise ValueError(f"Unsupported sandbox backend: {args.sandbox}")
 
-    
 
     python_tool = PythonExecutionTool(sandbox = sandbox)
 
-    
 
     if args.llm == "fake":
         llm = FakeLLMClient(mode=args.fake_mode)
@@ -116,10 +118,9 @@ def main() -> None:
         raise ValueError(f"Unsupported LLM backend: {args.llm}")
 
 
-
     agent = ReActCodingAgent(llm = llm, python_tool = python_tool, max_iterations = args.max_iterations)
-
-    result = agent.run(args.request)
+    
+    result = agent.run(args.request, expected_html_files = args.expect_html)
 
     run_store = JsonlRunStore()
     run_store.append_run({

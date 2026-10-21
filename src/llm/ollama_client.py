@@ -7,6 +7,7 @@ import requests
 from dotenv import load_dotenv
 
 from src.llm.base import BaseLLMClient, ChatMessage
+from src.llm.errors import LLMConnectionError, LLMServiceError, LLMTimeoutError
 
 
 # JSON schema that constrains the model output.
@@ -105,38 +106,44 @@ class OllamaClient(BaseLLMClient):
                     "temperature": self.temperature,
                     },
                 }
-        
+
         # Send the request to the local Ollama server.
-        response = requests.post(
-                f"{self.base_url}/api/chat",
-                json = payload,
-                timeout = self.timeout_seconds,
-                )
+        try:
+            response = requests.post(f"{self.base_url}/api/chat", json = payload, timeout = self.timeout_seconds)
         
-        # Raise an HTTPError for non-2xx responses.
+        except requests.exceptions.Timeout as exc:
+            raise LLMTimeoutError(f"Ollama request timed out after {self.timeout_seconds} seconds.") from exc
+        
+        except requests.exceptions.ConnectionError as exc:
+            raise LLMConnectionError(f"Cannot connect to the Ollama server at {self.base_url}.") from exc
+        
+        except requests.exceptions.RequestException as exc:
+            raise LLMServiceError(f"Ollama HTTP request failed: {exc}") from exc
+
+        # Check the HTTP status before interpreting the response body.
         try:
             response.raise_for_status()
-        except requests.HTTPError as exc:
-            raise RuntimeError(
-                    "Ollama request failed. Make sure Ollama is running and "
-                    f"the model '{self.model}' is available. "
-                    f"Status code: {response.status_code}. Body: {response.text}"
-                    ) from exc
         
-        # Parse Ollama's JSON HTTP response.
-        data = response.json()
+        except requests.exceptions.HTTPError as exc:
+            raise LLMServiceError(f"Ollama returned HTTP {response.status_code}: {response.text[:500]}") from exc
 
-        message = data.get("message", {})
+        # Validate the server response, independently of AgentAction.from_json().
+        try:
+            data = response.json()
 
-        content = message.get("content")
+        except ValueError as exc:
+            raise LLMServiceError("Ollama returned an invalid JSON HTTP response.") from exc
+
+        message = data.get("message") if isinstance(data, dict) else None
+        
+        content = message.get("content") if isinstance(message, dict) else None
         
         # Validate that the model returned non-empty text.
         if not isinstance(content, str) or not content.strip():
-            raise RuntimeError(
-                f"Ollama returned an empty or invalid message content: {data}"
-            )
+            raise LLMServiceError("Ollama returned missing or empty 'message.content'.")
 
         return content
+        
 
     def _to_ollama_messages(self, messages: list[ChatMessage]) -> list[dict[str, str]]:
         """

@@ -29,12 +29,27 @@ Rules:
 
 
 
-def build_user_prompt(user_request: str) -> str:
-    
+def build_user_prompt(user_request: str, expected_html_files: list[str] | None = None) -> str:
+    """
+    Build the initial user prompt, including explicitly required HTML artifacts.
+    """
+
+    artifact_requirements = ""
+
+    if expected_html_files:
+        filenames = "\n".join(f"- {filename}" for filename in expected_html_files)
+
+        artifact_requirements = (
+                "\n\nRequired HTML artifacts (exact filenames):\n"
+                f"{filenames}\n"
+                "Use execute_python to generate all required files. "
+                "A final_answer without these artifacts is insufficient."
+                )
+
     return f"""
 User request:
 
-{user_request}
+{user_request}{artifact_requirements}
 
 Decide the next action.
 """.strip()
@@ -42,7 +57,7 @@ Decide the next action.
 
 
 def build_retry_prompt(user_request: str, previous_code: str, observation: str) -> str:
-    
+
     return f"""
 The previous Python code failed or did not fully satisfy the request.
 
