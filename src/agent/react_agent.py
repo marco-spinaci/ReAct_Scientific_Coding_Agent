@@ -5,7 +5,9 @@ import logging
 
 from src.agent.prompts import SYSTEM_PROMPT, build_retry_prompt, build_user_prompt
 from src.agent.schemas import AgentAction, AgentRunResult
+from src.agent.artifact_validation import find_missing_html_artifacts, validate_expected_html_filenames
 from src.llm.base import BaseLLMClient, ChatMessage
+from src.llm.errors import LLMClientError
 from src.tools.python_tool import PythonExecutionTool
 
 
@@ -56,7 +58,7 @@ class ReActCodingAgent:
         self.max_iterations = max_iterations
 
     
-    def run(self, user_request: str) -> AgentRunResult:
+    def run(self, user_request: str, expected_html_files: list[str] | None = None) -> AgentRunResult:
         """
         Run the agent on a user request.
 
@@ -71,32 +73,98 @@ class ReActCodingAgent:
         """
         
         logger.info("Starting agent run. max_iterations=%d", self.max_iterations)
+        
+        expected_html_files = expected_html_files if expected_html_files is not None else []
+        
+        validate_expected_html_filenames(expected_html_files)
 
         # The system prompt defines behavior and output format.
         # The user prompt wraps the actual user request.
         messages = [
                 ChatMessage(role = "system", content = SYSTEM_PROMPT),
-                ChatMessage(role = "user", content = build_user_prompt(user_request))
+                ChatMessage(role = "user", content = build_user_prompt(user_request, expected_html_files = expected_html_files)),
                 ]
-        
+
         generated_files: list[str] = []
         last_observation = ""
         last_code = ""
 
         for iteration in range(1, self.max_iterations + 1):
-
             logger.info("Agent iteration %d/%d", iteration, self.max_iterations)
             
             # Ask the LLM what to do next.
-            raw_response = self.llm.generate(messages)
+            try:
+                raw_response = self.llm.generate(messages)
             
-            # Parse and validate the LLM JSON response.
-            # If malformed, AgentAction.from_json raises ValueError.
-            action = AgentAction.from_json(raw_response)
+            except LLMClientError as exc:
+                error_message = f"{type(exc).__name__}: {exc}"
+                
+                logger.error("LLM backend failed at iteration %d/%d: %s", iteration, self.max_iterations, error_message)
+
+                return AgentRunResult(
+                        success = False,
+                        final_answer = self._build_failure_answer(
+                            observation = error_message,
+                            generated_files = generated_files,
+                            reason = "The task could not be completed because the LLM backend failed.",
+                            ),
+                        generated_files = generated_files,
+                        iterations = iteration,
+                        )
+            
+            # Parse and validate the LLM response.
+            try:
+                action = AgentAction.from_json(raw_response)
+            
+            except ValueError as exc:
+                last_observation = f"Invalid LLM response: {exc}"
+
+                logger.warning(
+                        "LLM response validation failed at iteration %d/%d: %s",
+                        iteration,
+                        self.max_iterations,
+                        exc,
+                        )
+
+                if iteration < self.max_iterations:
+                    messages.append(ChatMessage(role = "assistant", content = raw_response))
+
+                    messages.append(ChatMessage(
+                        role = "user",
+                        content = (
+                            "Your previous response did not match the required AgentAction schema.\n"
+                            f"Validation error: {exc}\n"
+                            "Return exactly one valid JSON object containing the fields "
+                            "'thought', 'action', 'code', and 'final_answer'. "
+                            "Do not include Markdown or additional text."
+                            ),
+                        ))
+
+                continue
+
             logger.info("LLM selected action: %s", action.action)
 
             if action.action == "final_answer":
+                if expected_html_files:
+                    last_observation = (
+                            "Artifact validation failed: the task requires HTML files "
+                            f"{expected_html_files}, but the LLM returned final_answer without generating them."
+                            )
+                    logger.warning("LLM returned final_answer without producing the required HTML artifacts.")
+
+                    messages.append(ChatMessage(role = "assistant", content = raw_response))
+                    messages.append(ChatMessage(
+                        role = "user",
+                        content = (
+                            f"The task requires these HTML files: {', '.join(expected_html_files)}.\n"
+                            "A final_answer action alone is insufficient.\n"
+                            "Use execute_python to generate the required files and return a valid JSON action."
+                            ),
+                        ))
+                    continue
+
                 logger.info("Agent completed with final answer without tool execution.")
+                
                 return AgentRunResult(
                         success = True,
                         final_answer = action.final_answer or "",
@@ -105,7 +173,6 @@ class ReActCodingAgent:
                         )
 
             if action.action == "execute_python":
-                
                 # Safety check.
                 assert action.code is not None
 
@@ -121,8 +188,22 @@ class ReActCodingAgent:
                         "Tool execution completed. success=%s generated_files=%d",
                         tool_result.success, len(tool_result.generated_files)
                         )
+                
+                missing_artifacts: list[str] = []
 
-                if tool_result.success:
+                if tool_result.success and expected_html_files:
+                    missing_artifacts = find_missing_html_artifacts(
+                            expected_html_files = expected_html_files,
+                            generated_files = tool_result.generated_files,
+                            )
+
+                    if missing_artifacts:
+                        artifact_error = f"Artifact validation failed: missing or empty HTML files: {', '.join(missing_artifacts)}"
+                        
+                        last_observation = f"{tool_result.observation}\n{artifact_error}"
+                        logger.warning("%s", artifact_error)
+                
+                if tool_result.success and not missing_artifacts:
                     final_answer = self._build_success_answer(
                             observation = tool_result.observation,
                             generated_files = tool_result.generated_files,
@@ -184,12 +265,12 @@ class ReActCodingAgent:
         return "\n".join(parts)
 
 
-    def _build_failure_answer(self, observation: str, generated_files: list[str]) -> str:
+    def _build_failure_answer(self, observation: str, generated_files: list[str], reason: str | None = None) -> str:
 
         parts = [
-                "The task could not be completed successfully within the allowed iterations.",
+                reason or "The task could not be completed successfully within the allowed iterations.",
                 "",
-                "Last execution observation:",
+                "Last observation:",
                 observation or "No observation available.",
                 ]
 

@@ -20,10 +20,14 @@ No real-world or proprietary supply-chain dataset is included.
 
 - Accept a natural-language request through a command-line interface.
 - Query an LLM backend for a structured action (`execute_python` or `final_answer`).
+- Handle LLM backend failures through a common exception hierarchy.
+- Parse structured LLM responses, including JSON enclosed in Markdown code blocks.
 - Execute generated Python scripts with a configurable execution backend.
 - Capture execution output, errors, elapsed time, and generated files.
+- Retry invalid LLM responses using validation feedback.
 - Retry generated code after a failed execution, up to a configured iteration limit.
 - Produce interactive Plotly visualizations as HTML artifacts.
+- Optionally validate expected HTML artifacts before declaring task completion.
 - Record application logs and lightweight run metadata in JSONL format.
 - Run deterministic tests without external LLM services through `FakeLLMClient`.
 
@@ -73,6 +77,19 @@ The agent passes the execution error back to the client and tries a corrected ac
 
 > **What this test proves:** the local tool/execution path and deterministic retry flow work together. 
 It does **not** establish the reliability of a real LLM, the correctness of arbitrary generated analyses, or secure code isolation.
+
+### HTML artifact validation
+
+The agent supports optional validation of explicitly required HTML artifacts.
+
+For example:
+
+```bash
+python3 main.py \
+    --llm fake \
+    --sandbox local \
+    --expect-html synthetic_network_degree_distribution.html
+```
 
 ## Running with a local LLM: Ollama
 
@@ -188,6 +205,7 @@ The main options in `main.py` are:
 | `--output-dir` | `outputs` | Directory used for collected generated files. |
 | `--timeout` | `10` | Python execution timeout in seconds. |
 | `--max-iterations` | `2` | Maximum number of agent iterations. |
+| `--expect-html` | `None` | Require specified HTML artifacts; repeat the option for multiple files. |
 
 More example requests are available in `examples/example_prompts.md`.
 
@@ -201,9 +219,11 @@ The design uses pragmatic module names while following a ports-and-adapters appr
 ├── src/agent/
 │   ├── react_agent.py                   # Main application use case
 │   ├── prompts.py                       # LLM instructions and retry prompt
+│   ├── artifact_validation.py           # Expected HTML artifact validation
 │   └── schemas.py                       # Agent action/result models
 ├── src/llm/
 │   ├── base.py                          # BaseLLMClient port and ChatMessage
+│   ├── errors.py                        # Shared LLM exception hierarchy (error handling)
 │   ├── fake_client.py                   # Deterministic adapter
 │   ├── ollama_client.py                 # Ollama adapter
 │   └── openai_client.py                 # OpenAI adapter
@@ -251,10 +271,12 @@ The agent depends on the abstract LLM contract and on `PythonExecutionTool`, rat
 The workflow is deliberately simple:
 
 1. Ask the LLM for a structured action.
-2. Parse the action (`execute_python` or `final_answer`).
-3. For `execute_python`, run the generated script and collect an observation.
-4. If execution fails, send the previous code and error back for a retry.
-5. Stop after an execution success, a `final_answer` action, or the maximum number of iterations.
+2. Parse and validate the response, retrying if the action is malformed.
+3. Execute Python code when requested.
+4. Check execution results and optionally validate expected HTML artifacts.
+5. Provide failure observations to the LLM when recovery is possible.
+6. Return success or a structured failure result within the iteration limit.
+
 
 The current implementation is **ReAct-inspired**, not a general planning agent: successful code execution ends the run immediately, and there is no independent assessment that the analysis fulfills the scientific request.
 
@@ -291,21 +313,19 @@ Do not use the local executor to run untrusted code or process sensitive data wi
 
 Other known limitations:
 
+- Malformed LLM actions trigger validation-based retries, but recovery is not guaranteed.
+- Recognized LLM backend failures are converted into structured agent failures.
+  Automatic retries for HTTP timeouts and service errors are not implemented.
+- HTML artifact validation is optional and requires explicitly specified filenames.
+- Artifact validation checks file existence and non-empty content, not HTML validity, Plotly rendering, or scientific correctness.
+- Without explicit artifact requirements, the agent may accept successful code execution or a `final_answer` without verifying task completion.
 - The policy checks are incomplete and may be bypassed; they are not an OS-level security mechanism.
-- Invalid or Markdown-wrapped LLM JSON can raise a parsing error without a controlled retry.
-- Errors such as local-model HTTP timeouts are not yet handled as structured agent failures.
-- The agent may report success even if requested HTML artifacts are absent or the analysis is incomplete.
-- An LLM may return `final_answer` without executing a tool; this is not verification of the requested task.
-- The local executor collects generated files but does not establish that those files are trustworthy or scientifically correct.
 - E2B behavior has not been verified by automated integration tests.
 - Dependencies are not yet pinned for reproducible environment reconstruction.
 
 For less-trusted workloads, a future version should use stronger isolation, restricted permissions and networking, resource controls, and approval or review before executing generated code.
 
 ## Future improvements
-
-- robust JSON extraction from Markdown-formatted LLM responses.
-  This extension is particularly useful for real-world backends such as OpenAI, Ollama or other local models.
 
 - Support for uploaded CSV files.
 
