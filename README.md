@@ -224,6 +224,7 @@ The design uses pragmatic module names while following a ports-and-adapters appr
 ├── tests/                                # Automated and manual tests
 ├── examples/
 │   └── example_prompts.md
+├── LICENSE
 ├── requirements.txt
 ├── requirements-ollama.txt
 ├── requirements-openai.txt
@@ -330,7 +331,7 @@ For less-trusted workloads, a future version should use stronger isolation, rest
   The current implementation uses standard file-based logging. 
   A production version could add structured logs, run identifiers, per-iteration traces, and latency measurements.
 
-- Domain-specific tools for experiment diagnostics and research assistant.
+- Domain-specific tools for experiment diagnostics and research support.
 
 ## Development Notes
 
