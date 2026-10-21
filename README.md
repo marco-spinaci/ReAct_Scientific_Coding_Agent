@@ -4,7 +4,7 @@
 
 This project implements a lightweight **ReAct-style coding agent** that translates natural-language requests into Python code, executes that code through a configurable execution backend, and returns execution feedback and generated artifacts.
 
-The implementation emphasizes readable components, explicit interfaces, and reproducible development workflows rather than a large agent framework. 
+The implementation emphasizes readable components, explicit interfaces, and testable development workflows rather than a large agent framework. 
 At the moment, it is intended for experimentation and local development, **not for production use with untrusted generated code**.
 
 ## Research motivation
@@ -90,6 +90,14 @@ python3 main.py \
     --sandbox local \
     --expect-html synthetic_network_degree_distribution.html
 ```
+
+When `--expect-html` is provided, the agent checks whether the specified HTML artifact was generated and is not empty.
+
+If the required artifact is missing, the agent provides validation feedback to the LLM and retries, subject to the configured iteration limit.
+
+Multiple HTML files can be required by repeating the `--expect-html` option.
+
+Artifact validation does not guarantee valid HTML, successful Plotly rendering, or the scientific correctness of the generated analysis.
 
 ## Running with a local LLM: Ollama
 
@@ -301,10 +309,19 @@ Install the base dependencies, then run:
 pytest -q
 ```
 
-The automated tests cover the AST policy, local execution, the Python tool, deterministic LLM behavior, and selected agent success/retry paths. 
+The automated tests cover:
+
+- AST-based policy validation and local Python execution.
+- Python execution tool behavior.
+- Deterministic LLM interactions and agent execution flows.
+- Structured LLM response parsing and validation-based retries.
+- LLM backend error handling using mocked OpenAI and Ollama clients.
+- Expected HTML artifact validation and recovery strategies.
+
 Additional scripts in `tests/` allow manual checks of the OpenAI and Ollama clients.
 
-The tests do **not** verify comprehensive sandbox isolation, all responses from real LLMs, remote E2B execution, or the scientific validity of generated analyses.
+The tests do not establish comprehensive sandbox isolation, reliable behavior for arbitrary real LLM responses, remote E2B execution,
+or the scientific validity of generated analyses.
 
 ## Security and known limitations
 
