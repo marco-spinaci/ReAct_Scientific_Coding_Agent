@@ -221,7 +221,7 @@ The design uses pragmatic module names while following a ports-and-adapters appr
 │   └── synthetic_network_prompt.py      # Demonstration request
 ├── src/utils/
 │   └── logging_config.py                # Logging setup
-├── tests/                                # Automated and manual tests
+├── tests/                               # Automated and manual tests
 ├── examples/
 │   └── example_prompts.md
 ├── LICENSE
