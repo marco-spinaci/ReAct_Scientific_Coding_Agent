@@ -84,15 +84,41 @@ class ReActCodingAgent:
         last_code = ""
 
         for iteration in range(1, self.max_iterations + 1):
-
             logger.info("Agent iteration %d/%d", iteration, self.max_iterations)
             
             # Ask the LLM what to do next.
             raw_response = self.llm.generate(messages)
             
-            # Parse and validate the LLM JSON response.
-            # If malformed, AgentAction.from_json raises ValueError.
-            action = AgentAction.from_json(raw_response)
+            # Parse and validate the LLM response.
+            try:
+                action = AgentAction.from_json(raw_response)
+            
+            except ValueError as exc:
+                last_observation = f"Invalid LLM response: {exc}"
+
+                logger.warning(
+                        "LLM response validation failed at iteration %d/%d: %s",
+                        iteration,
+                        self.max_iterations,
+                        exc,
+                        )
+
+                if iteration < self.max_iterations:
+                    messages.append(ChatMessage(role = "assistant", content = raw_response))
+
+                    messages.append(ChatMessage(
+                        role = "user",
+                        content = (
+                            "Your previous response did not match the required AgentAction schema.\n"
+                            f"Validation error: {exc}\n"
+                            "Return exactly one valid JSON object containing the fields "
+                            "'thought', 'action', 'code', and 'final_answer'. "
+                            "Do not include Markdown or additional text."
+                            ),
+                        ))
+
+                continue
+
             logger.info("LLM selected action: %s", action.action)
 
             if action.action == "final_answer":
@@ -105,7 +131,6 @@ class ReActCodingAgent:
                         )
 
             if action.action == "execute_python":
-                
                 # Safety check.
                 assert action.code is not None
 
@@ -189,7 +214,7 @@ class ReActCodingAgent:
         parts = [
                 "The task could not be completed successfully within the allowed iterations.",
                 "",
-                "Last execution observation:",
+                "Last observation:",
                 observation or "No observation available.",
                 ]
 
