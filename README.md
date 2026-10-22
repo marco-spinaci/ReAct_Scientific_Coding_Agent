@@ -18,20 +18,42 @@ No real-world or proprietary supply-chain dataset is included.
 
 ## Current capabilities
 
-- Accept a natural-language request through a command-line interface.
-- Query an LLM backend for a structured action (`execute_python` or `final_answer`).
-- Handle LLM backend failures through a common exception hierarchy.
-- Parse structured LLM responses, including JSON enclosed in Markdown code blocks.
-- Execute generated Python scripts with a configurable execution backend.
-- Capture execution output, errors, elapsed time, and generated files.
-- Retry invalid LLM responses using validation feedback.
-- Retry generated code after a failed execution, up to a configured iteration limit.
-- Produce interactive Plotly visualizations as HTML artifacts.
-- Optionally validate expected HTML artifacts before declaring task completion.
-- Record application logs and lightweight run metadata in JSONL format.
-- Run deterministic tests without external LLM services through `FakeLLMClient`.
+The project provides a modular, ReAct-style agent for LLM-assisted Python execution and scientific visualization. 
+Its current functionality is organized into three main areas.
 
-**Available backends**
+### Agent workflow and error recovery
+
+- Accept natural-language requests through a command-line interface.
+- Generate structured LLM actions (`execute_python` or `final_answer`).
+- Parse and validate JSON responses, including JSON enclosed in Markdown code blocks.
+- Retry malformed LLM actions using validation feedback.
+- Retry failed Python executions using observations returned by the execution backend.
+- Handle recognized LLM connection, timeout, and service errors through a common exception hierarchy.
+- Return structured results indicating execution success or failure, generated artifacts, and the number of agent iterations.
+
+The agent follows a lightweight, ReAct-inspired execution loop. 
+It does not implement autonomous planning or independent verification of scientific results.
+
+### Python execution and artifact management
+
+The execution layer supports configurable backends, including local subprocess execution and an optional E2B integration.
+
+The local executor provides:
+
+- Configurable execution timeouts and termination of ordinary child processes within the same process group.
+- Incremental collection of stdout and stderr, with a configurable combined output-size limit.
+- Validation of generated artifacts, including size limits and rejection of symbolic links during collection.
+- Chunked artifact copying and staged publication to reduce the risk of incomplete results.
+- Separate output directories for each execution, preventing subsequent runs from overwriting previous artifacts.
+- Optional Linux process CPU-time and file-size limits. They are disabled by default and are not currently exposed through the command-line interface.
+
+The agent can also validate explicitly required HTML artifacts before reporting task completion. 
+Missing artifacts trigger recovery attempts within the configured iteration limit.
+
+These mechanisms improve execution reliability and resource management. 
+They do not provide complete operating-system isolation.
+
+### Available backends 
 
 | Component | Implementations | Notes |
 | --- | --- | --- |
@@ -43,6 +65,8 @@ No real-world or proprietary supply-chain dataset is included.
 
 The E2B integration has not been validated by the project's automated integration tests. 
 Actual behavior depends on the installed SDK version and remote environment.
+
+The current demonstration generates a synthetic directed supplier–customer network and produces an interactive Plotly visualization.
 
 ## Quick start: deterministic local demo
 
@@ -63,7 +87,7 @@ Run the default supplier–customer network example:
 python3 main.py --llm fake --sandbox local
 ```
 
-The run should create `outputs/synthetic_network_degree_distribution.html` and print a short summary. 
+The run should generate an interactive HTML artifact under `outputs/run_<unique-id>/synthetic_network_degree_distribution.html` and print a short summary.
 Open the HTML file in a browser to explore the plot.
 
 Test the execution-recovery path:
@@ -98,6 +122,9 @@ If the required artifact is missing, the agent provides validation feedback to t
 Multiple HTML files can be required by repeating the `--expect-html` option.
 
 Artifact validation does not guarantee valid HTML, successful Plotly rendering, or the scientific correctness of the generated analysis.
+
+The local executor stores artifacts from each execution in a separate `run_<unique-id>` directory under the configured output directory.
+This prevents subsequent executions from overwriting previously generated artifacts with the same filename.
 
 ## Running with a local LLM: Ollama
 
@@ -239,6 +266,7 @@ The design uses pragmatic module names while following a ports-and-adapters appr
 │   └── python_tool.py                   # Agent-facing Python tool
 ├── src/sandbox/
 │   ├── base.py                          # BaseSandboxExecutor port and result
+│   ├── resource_launcher.py             # Apply optional POSIX resource limits 
 │   ├── policy.py                        # AST checks
 │   ├── errors.py                        # Sandbox-related errors
 │   ├── local_executor.py                # Local execution adapter
@@ -317,6 +345,7 @@ The automated tests cover:
 - Structured LLM response parsing and validation-based retries.
 - LLM backend error handling using mocked OpenAI and Ollama clients.
 - Expected HTML artifact validation and recovery strategies.
+- Local execution timeouts, process-group cleanup, bounded output collection, artifact management, and optional resource limits.
 
 Additional scripts in `tests/` allow manual checks of the OpenAI and Ollama clients.
 
@@ -325,22 +354,67 @@ or the scientific validity of generated analyses.
 
 ## Security and known limitations
 
-**Warning: `LocalSandboxExecutor` is not a secure sandbox.** A temporary working directory, a separate subprocess, and AST-based policy checks do not restrict the Python process to that directory, remove its filesystem permissions, or enforce network isolation. 
-Do not use the local executor to run untrusted code or process sensitive data without additional containment and review.
+**This project is an experimental research prototype and is not intended for production execution of untrusted generated code.**
 
-Other known limitations:
+The local execution backend includes several mechanisms designed to improve reliability and limit resource consumption. 
+However, these should not be confused with secure sandbox isolation.
 
-- Malformed LLM actions trigger validation-based retries, but recovery is not guaranteed.
-- Recognized LLM backend failures are converted into structured agent failures.
-  Automatic retries for HTTP timeouts and service errors are not implemented.
+### Local execution and security boundaries
+
+`LocalSandboxExecutor` executes generated Python code in a subprocess running with the permissions of the user launching the agent.
+
+Although the executor uses a temporary working directory and performs AST-based policy checks, these mechanisms do not prevent the executed code from accessing other host resources.
+
+In particular:
+
+- The AST policy restricts selected operations and imports but is not a complete security mechanism.
+- The temporary working directory does not restrict filesystem access.
+- Host filesystem permissions and environment variables remain accessible according to the privileges of the executing process.
+- Network access is not isolated.
+- Artifact validation and symbolic-link checks do not provide comprehensive filesystem protection.
+
+**The current CLI executes LLM-generated Python code automatically, without requiring explicit user approval.**
+
+Because the local executor does not provide secure filesystem or network isolation, it should only be used in controlled environments where the risks of executing generated code are understood.
+
+Generated code should be inspected before execution when possible. 
+For untrusted workloads or sensitive data, stronger operating-system isolation and explicit execution approval are recommended.
+
+### Process and resource limitations
+
+The local executor provides execution timeouts, process-group termination, bounded output collection, and optional POSIX resource limits.
+
+These controls have important limitations:
+
+- Process-group termination does not guarantee termination of processes that detach from the original group.
+- CPU-time limits apply to individual processes rather than the aggregate CPU consumption of a complete process hierarchy.
+- File-size limits apply to individual files and do not impose a total disk-usage quota.
+- Artifact-size limits are enforced during collection and do not prevent excessive disk usage during script execution.
+- No general limit on process RAM consumption is currently enforced.
+- Linux-specific resource controls are optional and disabled unless explicitly configured.
+
+These features reduce certain operational risks but do not prevent all forms of resource exhaustion.
+
+### Agent and artifact validation limitations
+
+- Recovery from malformed LLM responses or failed Python executions is not guaranteed.
+- Recognized LLM backend failures are reported as structured failures; automatic retries for connection, timeout, and service errors are not currently implemented.
 - HTML artifact validation is optional and requires explicitly specified filenames.
-- Artifact validation checks file existence and non-empty content, not HTML validity, Plotly rendering, or scientific correctness.
-- Without explicit artifact requirements, the agent may accept successful code execution or a `final_answer` without verifying task completion.
-- The policy checks are incomplete and may be bypassed; they are not an OS-level security mechanism.
-- E2B behavior has not been verified by automated integration tests.
-- Dependencies are not yet pinned for reproducible environment reconstruction.
+- Artifact validation checks file existence and non-empty content, not HTML validity, successful Plotly rendering, or scientific correctness.
+- Without explicit artifact requirements, the agent may consider successful Python execution or a `final_answer` sufficient to complete a task.
+- Successful execution does not guarantee that generated analyses or numerical results are scientifically valid.
 
-For less-trusted workloads, a future version should use stronger isolation, restricted permissions and networking, resource controls, and approval or review before executing generated code.
+### Integration and reproducibility limitations
+
+- The E2B execution backend is optional and has not yet been validated through automated end-to-end integration tests.
+- Real LLM behavior may differ from deterministic and mocked test scenarios.
+- Dependencies are not fully pinned, so identical environments cannot yet be guaranteed across installations.
+
+### Future security improvements
+
+A future version may introduce an optional container-based execution backend to provide stronger filesystem and network isolation, together with memory, CPU, and process limits.
+
+Until such mechanisms are implemented and tested, `LocalSandboxExecutor` should be treated as a **controlled local execution environment, not a security boundary**.
 
 ## Future improvements
 
@@ -358,9 +432,6 @@ For less-trusted workloads, a future version should use stronger isolation, rest
 - Artifact previews. 
   A more advanced version could automatically display a preview of the graph, a list of generated artifacts, and file metadata.
 
-- Richer retry and recovery strategies.
-  Now, retrying is very simple. In a more advanced version, we could distinguish between syntax error, import error, policy error, runtime error, HTML file not generated, and user request not fulfilled. 
- 
 - Richer CLI using Typer or Rich.
   A more elegant CLI could use Typer for structured commands, Rich for coloured output, tables and panels, progress bars, and improved error formatting.
 
@@ -377,7 +448,6 @@ This project was developed with the assistance of AI-based coding tools.
 Architectural decisions, integration, testing, validation, and final review were performed manually.
 
 ## License
-
 
 This project is licensed under the GNU General Public License v3.0 (GPL-3.0).
 
